@@ -10,6 +10,8 @@ public static class T {
   [DllImport("user32")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32")] public static extern bool IsWindow(IntPtr h);
   [DllImport("user32")] public static extern IntPtr GetParent(IntPtr h);
+  [DllImport("user32")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  [DllImport("user32")] public static extern IntPtr GetDesktopWindow();
   [DllImport("user32")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32")] public static extern bool GetWindowRect(IntPtr h, out R r);
   [DllImport("user32")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hi, bool r);
@@ -62,14 +64,15 @@ function Open-Tab([string]$S) { $p = Start-Process -FilePath $exe -ArgumentList 
 Add-Check 'host adopts two panes' (Wait-Until { $s = Get-State; $s['L_hwnd'] -and $s['R_hwnd'] } 25)
 $s = Get-State; $L = [IntPtr][long]$s['L_hwnd']; $R = [IntPtr][long]$s['R_hwnd']; $H = $hp.MainWindowHandle
 $hp.Refresh(); $H = $hp.MainWindowHandle
-Add-Check 'both panes embedded' (([T]::GetParent($L) -ne [IntPtr]::Zero) -and ([T]::GetParent($R) -ne [IntPtr]::Zero))
+$desktop = [T]::GetDesktopWindow()
+Add-Check 'both panes embedded' (([T]::GetAncestor($L, 1) -ne $desktop) -and ([T]::GetAncestor($R, 1) -ne $desktop))
 Add-Check 'outside window not adopted' ([T]::IsWindow($outside) -and [T]::GetParent($outside) -eq [IntPtr]::Zero -and $outside -ne $L -and $outside -ne $R)
 
 [T]::SetForegroundWindow($L) | Out-Null; Start-Sleep -Milliseconds 400
 foreach ($q in 'evtab_alpha','evtab_bravo') { Open-Tab $q; [T]::SetForegroundWindow($L) | Out-Null; Start-Sleep -Milliseconds 200 }
 Send-Keys '^%o'
 Add-Check 'Ctrl+Alt+O moves to right pane' (Wait-Until { (Get-State)['active'] -eq 'R' } 4) (Get-State)['active']
-foreach ($q in 'evtab_charlie','evtab_delta') { Open-Tab $q; [T]::SetForegroundWindow($R) | Out-Null; Start-Sleep -Milliseconds 200 }
+foreach ($q in 'evtab_charlie','evtab_delta') { [T]::SetForegroundWindow($R) | Out-Null; Start-Sleep -Milliseconds 300; Send-Keys '^t'; Send-Keys $q; Start-Sleep -Milliseconds 300 }
 Start-Sleep -Milliseconds 500
 $s = Get-State
 Add-Check 'each pane has its own tabs' ($s['L_tabs'] -match 'evtab_bravo' -and $s['R_tabs'] -match 'evtab_delta' -and $s['L_tabs'] -notmatch 'evtab_delta') "L=$($s['L_tabs']) R=$($s['R_tabs'])"
