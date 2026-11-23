@@ -35,8 +35,27 @@ foreach ($s in 'evdiag_a', 'evdiag_b') {
     Start-Sleep -Milliseconds 700
 }
 Write-Listing 'after seeding'
-Start-Sleep -Seconds 40
-Write-Listing 'after 40s running'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -Namespace V -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'
+$p.Refresh()
+[V.W]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait('^t')
+Start-Sleep -Milliseconds 600
+[System.Windows.Forms.SendKeys]::SendWait('evdiag_typed')
+Start-Sleep -Seconds 22
+Write-Listing 'after typing in a new tab, 22s'
+$p.Refresh()
+[V.W]::PostMessage($p.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+Start-Sleep -Seconds 4
+$p.Refresh()
+Write-Diag "after WM_CLOSE, process exited: $($p.HasExited)"
+Write-Listing 'after closing window'
+if ($p.HasExited) { $p = Start-Process -FilePath $exe -PassThru } else { Start-Process -FilePath $exe }
+Start-Sleep -Seconds 5
+Write-Listing 'after reopening'
+Start-Sleep -Seconds 18
+Write-Listing 'after 18s more'
 $s = Start-Process -FilePath $exe -ArgumentList '-save-db-now' -PassThru
 Write-Diag "save-db-now exited in 15s: $($s.WaitForExit(15000))"
 Start-Sleep -Seconds 3
@@ -50,6 +69,7 @@ $ini = Join-Path $appData 'Everything-1.5a.ini'
 if (Test-Path -LiteralPath $ini) {
     Write-Diag '--- ini session keys after exit'
     Get-Content -LiteralPath $ini | Where-Object { $_ -match '^[a-z_]*session[a-z_]*=' } | ForEach-Object { Write-Diag $_ }
+    Copy-Item -LiteralPath $ini -Destination (Join-Path $results 'vm_ini.txt')
 }
 $f = Join-Path $appData 'Session-1.5a.json'
 if (Test-Path -LiteralPath $f) { Copy-Item -LiteralPath $f -Destination (Join-Path $results 'session.json') }
