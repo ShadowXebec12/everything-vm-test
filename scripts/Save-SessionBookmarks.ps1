@@ -58,7 +58,7 @@ Start-Process -FilePath $everythingExe -ArgumentList '-save-db-now' -WindowStyle
 Start-Sleep -Milliseconds 800
 
 if (-not (Test-Path $sessionFile)) { throw "Session file not found: $sessionFile" }
-$data = Get-Content $sessionFile -Raw | ConvertFrom-Json
+$data = Get-Content -LiteralPath $sessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
 
 $openWindows = @()
 for ($i = 0; $i -lt $data.Count; $i++) {
@@ -76,9 +76,18 @@ if ($openWindows.Count -eq 0) {
 
 $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $backupPath = Join-Path (Split-Path $bookmarksFile) ("Bookmarks-1.5a.backup-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + ".csv")
-Copy-Item -Path $bookmarksFile -Destination $backupPath -Force
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+if (Test-Path -LiteralPath $bookmarksFile) {
+    Copy-Item -LiteralPath $bookmarksFile -Destination $backupPath -Force
+} else {
+    $backupPath = '(none, new bookmarks file)'
+    $header = 'Name,Type,Folder,Case,Whole Word,Path,Diacritic,Prefix,Suffix,Ignore Punctuation,Ignore Whitespace,Regex,Search,Filter,Columns,Sort,Descending,View,Index,File List,Host,Link Type,Macro,Key,Icon'
+    [System.IO.File]::WriteAllText($bookmarksFile, $header + "`r`n", $utf8NoBom)
+}
 
 $newLines = @()
+$hasParent = @(Import-Csv -LiteralPath $bookmarksFile -Encoding UTF8 | Where-Object { $_.Name -eq $parentFolder -and $_.Type -eq '1' -and $_.Folder -eq '' }).Count -gt 0
+if (-not $hasParent) { $newLines += Build-Row -Name $parentFolder -Type 1 -Folder '' }
 $windowNum = 0
 foreach ($w in $openWindows) {
     $windowNum++
@@ -88,12 +97,12 @@ foreach ($w in $openWindows) {
         $searchText = if ($t.search) { $t.search } else { '' }
         $name = if ($searchText) { $searchText } else { '(empty search)' }
         $descending = if ($t.sort_ascending -eq 1) { 0 } else { 1 }
-        $newLines += Build-Row -Name $name -Type 0 -Folder $folderName `
+        $newLines += Build-Row -Name $name -Type 0 -Folder ($parentFolder + '/' + [uri]::EscapeDataString($folderName)) `
             -Case $t.match_case -WholeWord $t.match_whole_word -Path $t.match_path -Regex $t.match_regex `
             -Search $searchText -Filter $t.filter -Sort $t.sort -Descending $descending
     }
 }
 
-Add-Content -Path $bookmarksFile -Value $newLines -Encoding utf8
+[System.IO.File]::AppendAllText($bookmarksFile, (($newLines -join "`r`n") + "`r`n"), $utf8NoBom)
 
 Write-Output "OK windows=$($openWindows.Count) tabs=$(($openWindows.Tabs | Measure-Object).Count) backup=$backupPath"

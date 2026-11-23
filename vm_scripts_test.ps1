@@ -178,8 +178,9 @@ $w = Get-EvWindows
 Add-Check 'default instance class' ($w.Count -ge 1 -and $w[0].Class -eq 'EVERYTHING_(1.5a)') ($w | ForEach-Object Class | Out-String)
 Add-Check 'single-window starts with 1 window' ($w.Count -eq 1) "windows=$($w.Count)"
 
-foreach ($s in 'evtab_alpha','evtab_bravo','evtab_charlie') {
-    Invoke-Everything @('-url', "es:$s`?newtab=1") | Out-Null
+$omega = 'evtab_omega ' + [char]0x3A9
+foreach ($s in 'evtab_alpha','evtab_bravo','evtab_charlie',$omega) {
+    Invoke-Everything @('-url', ('es:' + [uri]::EscapeDataString($s) + '?newtab=1')) | Out-Null
     Start-Sleep -Milliseconds 700
 }
 $w = Get-EvWindows
@@ -238,6 +239,7 @@ try {
     $ws = Read-Workspace 'named save'
     Add-Check 'Save writes a workspace' ($null -ne $ws) $msg
     Add-Check 'Save excludes closed tabs' ($null -ne $ws -and $ws.Count -eq $liveTabs.Count) "saved=$(@($ws).Count) open=$($liveTabs.Count)"
+    Add-Check 'Save keeps non-ASCII search' (@($ws | Where-Object { $_.search -ceq $omega }).Count -eq 1) (($ws | ForEach-Object search) -join ' | ')
 
     Set-NameBox 'named save'
     Click-Id 'SaveBtn'
@@ -258,10 +260,15 @@ try {
         $dlg = Wait-Dialog 3
         $msg = if ($dlg) { Close-Dialog $dlg } else { '(no message shown)' }
         $afterFiles = @(Get-ChildItem -LiteralPath $saved -File).Count
-        $claimedSaved = $msg -like 'Saved *'
-        $honest = (-not $claimedSaved -and $msg -ne '(no message shown)') -or ($claimedSaved -and $afterFiles -gt $beforeFiles)
+        $honest = ($msg -notlike 'Saved *') -and ($msg -ne '(no message shown)') -and ($afterFiles -eq $beforeFiles)
         Add-Check "Invalid name handled: $bad" $honest "msg=$msg files $beforeFiles -> $afterFiles"
     }
+    Set-NameBox 'set [1]'
+    Click-Id 'SaveBtn'
+    $dlg = Wait-Dialog
+    if ($dlg) { Close-Dialog $dlg | Out-Null }
+    Add-Check 'Save handles [brackets] in name' (Test-Path -LiteralPath (Join-Path $saved 'set [1].json'))
+    foreach ($decoy in 'w1', 'w2', 'w[12]') { '[]' | Set-Content -LiteralPath (Join-Path $saved "$decoy.json") -Encoding UTF8 }
     Set-NameBox ''
 
     Click-Id 'SnapshotBtn'
@@ -314,6 +321,12 @@ try {
     Add-Check 'Rename invalid name tells user' ($msg -ne '(no message shown)') $msg
     Set-NameBox ''
 
+    Select-Workspace 'w[12]' | Out-Null
+    Click-Id 'DeleteBtn'
+    $dlg = Wait-Dialog
+    if ($dlg) { Close-Dialog $dlg 'Yes' | Out-Null }
+    Start-Sleep -Milliseconds 500
+    Add-Check 'Delete [brackets] removes only that file' ((-not (Test-Path -LiteralPath (Join-Path $saved 'w[12].json'))) -and (Test-Path -LiteralPath (Join-Path $saved 'w1.json')) -and (Test-Path -LiteralPath (Join-Path $saved 'w2.json')))
     Select-Workspace 'renamed save' | Out-Null
     Click-Id 'DeleteBtn'
     $dlg = Wait-Dialog
@@ -338,6 +351,7 @@ Get-ChildItem -LiteralPath $saved -Force | Select-Object Name, Length | Format-T
 function Invoke-Bookmarks {
     $o = Join-Path $results 'bm_out.txt'; $e = Join-Path $results 'bm_err.txt'
     $p = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wsDir\Save-SessionBookmarks.ps1`"" -WindowStyle Hidden -RedirectStandardOutput $o -RedirectStandardError $e -PassThru
+    $null = $p.Handle
     $done = $p.WaitForExit(30000)
     [PSCustomObject]@{ Done = $done; Exit = $(if ($done) { $p.ExitCode } else { -1 }); Out = (Get-Content -LiteralPath $o -Raw -ErrorAction SilentlyContinue); Err = (Get-Content -LiteralPath $e -Raw -ErrorAction SilentlyContinue) }
 }
@@ -356,10 +370,10 @@ Invoke-Everything @('-exit') 20000 | Out-Null
 Wait-Until { (Get-EvWindows).Count -eq 0 } 15 | Out-Null
 $header = 'Name,Type,Folder,Case,Whole Word,Path,Diacritic,Prefix,Suffix,Ignore Punctuation,Ignore Whitespace,Regex,Search,Filter,Columns,Sort,Descending,View,Index,File List,Host,Link Type,Macro,Key,Icon'
 $keep = '"keep me",0,"",0,0,0,0,0,0,0,0,0,"evtab_alpha","","","",0,0,,,,0,,,""'
-[IO.File]::WriteAllText($bookmarks, "$header`r`n$keep`r`n", (New-Object System.Text.UTF8Encoding $true))
+[IO.File]::WriteAllText($bookmarks, "$header`r`n$keep`r`n", (New-Object System.Text.UTF8Encoding $false))
 Start-Process -FilePath $exe
 Wait-Until { (Get-EvWindows).Count -ge 1 } 25 | Out-Null
-foreach ($s in 'evtab_bookmark_one','evtab "quoted" two') {
+foreach ($s in 'evtab_bookmark_one','evtab "quoted" two',('evtab_bm_omega ' + [char]0x3A9)) {
     Invoke-Everything @('-url', ('es:' + [uri]::EscapeDataString($s) + '?newtab=1')) | Out-Null
     Start-Sleep -Milliseconds 700
 }
@@ -380,6 +394,19 @@ Add-Check 'Bookmarks: quoted search intact' (@($rows | Where-Object Search -eq '
 $sessionFolderRows = @($rows | Where-Object { $_.Name -eq 'Sessions' -and $_.Type -eq '1' })
 Add-Check 'Bookmarks: Sessions parent folder exists' ($sessionFolderRows.Count -ge 1) "rows=$($sessionFolderRows.Count)"
 $sessionRows = @($rows | Where-Object Search -eq 'evtab_bookmark_one').Count
+$child = @($rows | Where-Object Search -eq 'evtab_bookmark_one')[0]
+Add-Check 'Bookmarks: tab nests under Sessions/Window' ($child.Folder -like 'Sessions/Window%201%20-%20*') $child.Folder
+$winName = [uri]::UnescapeDataString(($child.Folder -split '/')[1])
+Add-Check 'Bookmarks: window folder row is under Sessions' (@($rows | Where-Object { $_.Type -eq '1' -and $_.Name -eq $winName -and $_.Folder -eq 'Sessions' }).Count -eq 1) $winName
+$utfRows = @(Import-Csv -LiteralPath $bookmarks -Encoding UTF8)
+Add-Check 'Bookmarks: non-ASCII search intact' (@($utfRows | Where-Object { $_.Search -ceq ('evtab_bm_omega ' + [char]0x3A9) }).Count -ge 1)
+Add-Check 'Bookmarks: file stays without BOM' (-not ($raw[0] -eq 0xEF -and $raw[1] -eq 0xBB))
+Start-Sleep -Seconds 1
+$r2 = Invoke-Bookmarks
+$rows2 = @(Import-Csv -LiteralPath $bookmarks -Encoding UTF8)
+Add-Check 'Bookmarks: second run keeps one Sessions folder' ($r2.Exit -eq 0 -and @($rows2 | Where-Object { $_.Name -eq 'Sessions' -and $_.Type -eq '1' }).Count -eq 1) "exit=$($r2.Exit)"
+$rows = $rows2
+$sessionRows = @($rows | Where-Object Search -eq 'evtab_bookmark_one').Count
 
 Invoke-Everything @('-exit') 20000 | Out-Null
 Wait-Until { (Get-EvWindows).Count -eq 0 } 15 | Out-Null
@@ -395,6 +422,27 @@ Wait-Until { (Get-EvWindows).Count -eq 0 } 15 | Out-Null
 Start-Sleep -Seconds 2
 $after2 = @(Import-Csv -LiteralPath $bookmarks)
 Add-Check 'Bookmarks: survive a restart' (@($after2 | Where-Object Search -eq 'evtab_bookmark_one').Count -ge 1) "rows=$($after2.Count)"
+Start-Process -FilePath $exe
+Wait-Until { (Get-EvWindows).Count -ge 1 } 25 | Out-Null
+Start-Sleep -Seconds 2
+Invoke-Everything @('-bookmark', 'evtab_bookmark_one') | Out-Null
+$opened = Wait-Until { @((Get-EvWindows) | Where-Object { ($_.Tabs -join ' ') -match 'evtab_bookmark_one' }).Count -ge 1 } 8
+Add-Check 'Bookmarks: Everything can open a saved bookmark' $opened (((Get-EvWindows) | ForEach-Object { $_.Tabs -join ' | ' }) -join ' || ')
+[N]::SetForegroundWindow((Get-EvWindows)[0].Hwnd) | Out-Null
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait('%b')
+Start-Sleep -Milliseconds 700
+Save-Screen '04_bookmarks_menu'
+[System.Windows.Forms.SendKeys]::SendWait('{ESC}{ESC}')
+$big = Join-Path $env:RUNNER_TEMP 'big_session.json'
+$oneTab = '{"is_closed":0,"search":"evtab_big_search_text_for_size","filter":"EVERYTHING","sort":"Name","sort_ascending":1,"match_case":0,"match_path":0,"match_whole_word":0,"match_regex":0,"padding":"' + ('x' * 300) + '"}'
+$oneWin = '{"is_closed":0,"tabs":[' + ((1..60 | ForEach-Object { $oneTab }) -join ',') + ']}'
+[IO.File]::WriteAllText($big, '[' + ((1..($([int](20MB / $oneWin.Length))) | ForEach-Object { $oneWin }) -join ',') + ']')
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$bigOk = $false
+try { $bigData = Get-Content -LiteralPath $big -Raw -Encoding UTF8 | ConvertFrom-Json; $bigOk = @($bigData).Count -gt 1 } catch { $bigErr = "$_" }
+$sw.Stop()
+Add-Check 'Large 20 MB session parses' $bigOk ("seconds=$([math]::Round($sw.Elapsed.TotalSeconds,1)) bytes=$((Get-Item -LiteralPath $big).Length) $bigErr")
 
 $fails = @(Import-Csv -LiteralPath $tsv -Delimiter "`t" | Where-Object result -eq 'FAIL').Count
 Write-Host "FAILS: $fails"

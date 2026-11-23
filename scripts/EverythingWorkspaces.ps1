@@ -67,9 +67,9 @@ function ConvertTo-EverythingUrl {
 }
 
 function Get-OpenWindows {
-    if (-not (Test-Path $sessionFile)) { return @() }
+    if (-not (Test-Path -LiteralPath $sessionFile)) { return @() }
     try {
-        $data = Get-Content $sessionFile -Raw | ConvertFrom-Json
+        $data = Get-Content -LiteralPath $sessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
         return @()
     }
@@ -77,7 +77,7 @@ function Get-OpenWindows {
     for ($i = 0; $i -lt $data.Count; $i++) {
         $w = $data[$i]
         if ($w.is_closed -eq 1) { continue }
-        $sessionTabs = @($w.tabs)
+        $sessionTabs = @($w.tabs | Where-Object { $_.is_closed -ne 1 })
         if ($sessionTabs.Count -eq 0) { continue }
         $preview = ($sessionTabs | Select-Object -First 3 | ForEach-Object { if ($_.search) { $_.search } else { '(empty)' } }) -join ' | '
         $windows += [PSCustomObject]@{
@@ -115,14 +115,24 @@ function Get-DefaultWorkspaceName {
     return "Window $WindowNumber session $($Timestamp.ToString('yyyy-MM-dd_HHmmss'))"
 }
 
+function Get-WorkspaceNameProblem {
+    param([string]$Name)
+    if ($Name.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        return 'A workspace name cannot contain any of these: \ / : * ? " < > |'
+    }
+    if ($Name.EndsWith('.')) { return 'A workspace name cannot end with a dot.' }
+    if ($Name -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$') { return "'$Name' is a name Windows reserves." }
+    return ''
+}
+
 function Get-SavedWorkspaces {
-    Get-ChildItem -Path $savedDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
+    Get-ChildItem -LiteralPath $savedDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | ForEach-Object {
             $tabs = @()
             try {
                 # Windows PowerShell returns a JSON array as one Object[] item
                 # when the pipeline is wrapped directly in @(...).
-                $tabs = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                $tabs = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
                 $tabs = @($tabs)
             } catch {}
             $preview = ($tabs | Select-Object -First 3 | ForEach-Object { if ($_.search) { $_.search } else { '(empty)' } }) -join ' | '
@@ -202,7 +212,7 @@ $script:openWindows = @()
 function Refresh-WindowCombo {
     # Everything autosaves Session-1.5a.json on its own periodically -- no need to
     # force it with -save-db-now (that CLI call has hung the live process before).
-    $script:openWindows = Get-OpenWindows
+    $script:openWindows = @(Get-OpenWindows)
     $windowCombo.Items.Clear()
     foreach ($w in $script:openWindows) { $windowCombo.Items.Add($w.Label) | Out-Null }
     if ($windowCombo.Items.Count -gt 0) { $windowCombo.SelectedIndex = 0 }
@@ -225,13 +235,18 @@ $saveBtn.Add_Click({
     if ([string]::IsNullOrWhiteSpace($name)) {
         $name = Get-DefaultWorkspaceName -WindowNumber ($windowCombo.SelectedIndex + 1)
     }
+    $nameProblem = Get-WorkspaceNameProblem $name
+    if ($nameProblem) {
+        [System.Windows.MessageBox]::Show($nameProblem, 'Everything Workspaces') | Out-Null
+        return
+    }
     $tabsOut = Get-TabsOut $selectedWindow.Tabs
     $destPath = Join-Path $savedDir ($name + '.json')
-    if (Test-Path $destPath) {
+    if (Test-Path -LiteralPath $destPath) {
         $confirm = [System.Windows.MessageBox]::Show("Workspace '$name' already exists. Overwrite?", 'Everything Workspaces', 'YesNo')
         if ($confirm -ne 'Yes') { return }
     }
-    $tabsOut | ConvertTo-Json -Depth 5 | Set-Content -Path $destPath -Encoding utf8
+    $tabsOut | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $destPath -Encoding utf8
     $saveNameBox.Text = ''
     Refresh-WorkspaceList
     [System.Windows.MessageBox]::Show("Saved $($tabsOut.Count) tabs to workspace '$name'.", 'Everything Workspaces') | Out-Null
@@ -246,7 +261,7 @@ $loadBtn.Add_Click({
     $name = $selected.Name
     $path = Join-Path $savedDir ($name + '.json')
     # Unwrap top-level JSON arrays correctly under Windows PowerShell 5.1.
-    $tabs = Get-Content $path -Raw | ConvertFrom-Json
+    $tabs = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $tabs = @($tabs)
     if ($tabs.Count -eq 0) {
         [System.Windows.MessageBox]::Show('That workspace has no saved tabs.', 'Everything Workspaces') | Out-Null
@@ -274,7 +289,7 @@ $snapshotBtn.Add_Click({
         $w = $script:openWindows[$i]
         $tabsOut = Get-TabsOut $w.Tabs
         $destPath = Join-Path $savedDir "Window $($i + 1) session $stamp.json"
-        $tabsOut | ConvertTo-Json -Depth 5 | Set-Content -Path $destPath -Encoding utf8
+        $tabsOut | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $destPath -Encoding utf8
         $saved++
     }
     Refresh-WorkspaceList
@@ -293,13 +308,18 @@ $renameBtn.Add_Click({
         [System.Windows.MessageBox]::Show('Type the new name in the box above, then click Rename.', 'Everything Workspaces') | Out-Null
         return
     }
+    $nameProblem = Get-WorkspaceNameProblem $newName
+    if ($nameProblem) {
+        [System.Windows.MessageBox]::Show($nameProblem, 'Everything Workspaces') | Out-Null
+        return
+    }
     $oldPath = Join-Path $savedDir ($name + '.json')
     $newPath = Join-Path $savedDir ($newName + '.json')
-    if (Test-Path $newPath) {
+    if (Test-Path -LiteralPath $newPath) {
         [System.Windows.MessageBox]::Show("A workspace named '$newName' already exists.", 'Everything Workspaces') | Out-Null
         return
     }
-    Rename-Item -Path $oldPath -NewName (Split-Path -Leaf $newPath)
+    Rename-Item -LiteralPath $oldPath -NewName (Split-Path -Leaf $newPath)
     $saveNameBox.Text = ''
     Refresh-WorkspaceList
 })
@@ -313,7 +333,7 @@ $deleteBtn.Add_Click({
     $name = $selected.Name
     $confirm = [System.Windows.MessageBox]::Show("Delete workspace '$name'?", 'Everything Workspaces', 'YesNo')
     if ($confirm -ne 'Yes') { return }
-    Remove-Item -Path (Join-Path $savedDir ($name + '.json')) -Force
+    Remove-Item -LiteralPath (Join-Path $savedDir ($name + '.json')) -Force
     Refresh-WorkspaceList
 })
 
