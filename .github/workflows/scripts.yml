@@ -1,0 +1,24 @@
+name: workspace-scripts
+on:
+  push:
+    paths:
+      - 'scripts/**'
+      - 'vm_scripts_test.ps1'
+      - '.github/workflows/scripts.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Drive scripts against Everything 1391a
+        shell: powershell
+        run: ./vm_scripts_test.ps1
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: script-results
+          path: results
+          if-no-files-found: error

@@ -1,0 +1,20 @@
+name: smoke
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Launch Everything and capture screen
+        shell: pwsh
+        run: ./smoke.ps1
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-results
+          path: results
+          if-no-files-found: error
