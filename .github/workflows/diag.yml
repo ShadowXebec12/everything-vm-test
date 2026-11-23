@@ -1,0 +1,23 @@
+name: diag
+on:
+  push:
+    paths:
+      - 'vm_diag.ps1'
+      - '.github/workflows/diag.yml'
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find session file behavior
+        shell: powershell
+        run: ./vm_diag.ps1
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-results
+          path: results
+          if-no-files-found: error
