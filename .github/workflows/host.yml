@@ -1,0 +1,24 @@
+name: split-host
+on:
+  push:
+    paths:
+      - 'host/**'
+      - 'vm_host_test.ps1'
+      - '.github/workflows/host.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and drive split host
+        shell: powershell
+        run: ./vm_host_test.ps1
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-results
+          path: results
+          if-no-files-found: error
