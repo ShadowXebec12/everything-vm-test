@@ -144,7 +144,7 @@ class Host : Form
     readonly Pane left = new Pane { Name = "L" }, right = new Pane { Name = "R" };
     readonly List<TabRef> recent = new List<TabRef>();
     readonly Timer settle = new Timer { Interval = 150 };
-    W.HookProc hookProc; IntPtr fgHook, selHook; bool keysOn; Palette palette; Pane active;
+    W.HookProc hookProc; IntPtr fgHook, selHook, nameHook; bool keysOn; Palette palette; Pane active;
 
     public Host(string exePath, string state)
     {
@@ -192,6 +192,7 @@ class Host : Form
         fgHook = W.SetWinEventHook(3, 3, IntPtr.Zero, hookProc, 0, 0, 2);
         uint pid; W.GetWindowThreadProcessId(a, out pid);
         selHook = W.SetWinEventHook(0x8006, 0x8006, IntPtr.Zero, hookProc, pid, 0, 2);
+        nameHook = W.SetWinEventHook(0x800C, 0x800C, IntPtr.Zero, hookProc, pid, 0, 2);
         FocusPane(left); SyncKeys(); NoteCurrent(); WriteState();
     }
     void Fail() { MessageBox.Show(this, "Could not open two Everything windows.", Text); Close(); }
@@ -203,6 +204,7 @@ class Host : Form
             if (h == left.Hwnd) active = left; else if (h == right.Hwnd) active = right;
             SyncKeys(); settle.Stop(); settle.Start();
         }
+        else if (ev == 0x800C) { if (obj == 0 && (h == left.Hwnd || h == right.Hwnd)) { settle.Stop(); settle.Start(); } }
         else if (W.Cls(h) == "SysTabControl32") { settle.Stop(); settle.Start(); }
     }
 
@@ -238,6 +240,7 @@ class Host : Form
 
     void FocusPane(Pane p)
     {
+        NoteCurrent();
         if (p == right && split.Panel2Collapsed) ToggleSplit();
         active = p; W.SetForegroundWindow(p.Hwnd); WriteState();
     }
@@ -267,6 +270,7 @@ class Host : Form
     void SearchTabs()
     {
         if (palette != null) { palette.Activate(); return; }
+        NoteCurrent();
         var tabs = AllTabs().OrderBy(RecentRank).ToList();
         using (palette = new Palette(tabs))
         {
@@ -322,6 +326,7 @@ class Host : Form
         settle.Stop();
         if (fgHook != IntPtr.Zero) W.UnhookWinEvent(fgHook);
         if (selHook != IntPtr.Zero) W.UnhookWinEvent(selHook);
+        if (nameHook != IntPtr.Zero) W.UnhookWinEvent(nameHook);
         if (keysOn) for (int i = 1; i <= 4; i++) W.UnregisterHotKey(Handle, i);
         foreach (var p in new[] { left, right })
         {
