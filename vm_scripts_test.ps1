@@ -1,8 +1,16 @@
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
-Add-Type @'
+Add-Type -ReferencedAssemblies Accessibility @'
 using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
 public static class N {
+  [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+  public static string[] TabNames(IntPtr tab) {
+    var r = new List<string>(); Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71"); object o;
+    if (AccessibleObjectFromWindow(tab, 0xFFFFFFFC, ref g, out o) != 0 || o == null) return r.ToArray();
+    var a = (Accessibility.IAccessible)o; int n = a.accChildCount;
+    for (int i = 1; i <= n; i++) { try { r.Add(a.get_accName(i) ?? ""); } catch { r.Add(""); } }
+    return r.ToArray();
+  }
   public delegate bool P(IntPtr h, IntPtr l);
   [DllImport("user32")] static extern bool EnumWindows(P p, IntPtr l);
   [DllImport("user32")] static extern bool EnumChildWindows(IntPtr h, P p, IntPtr l);
@@ -53,7 +61,7 @@ $src = Get-ChildItem -LiteralPath $unz -Recurse -Filter 'Everything*.exe' | Sele
 Copy-Item -LiteralPath $src.FullName -Destination $exe -Force
 Add-Check 'exe version is 1391a' ((Get-Item -LiteralPath $exe).VersionInfo.FileVersion -like '1.5.0.1391*') (Get-Item -LiteralPath $exe).VersionInfo.FileVersion
 Set-Content -LiteralPath (Join-Path $installDir 'Everything-1.5a.ini') -Encoding ASCII -Value "[Everything]`r`napp_data=1`r`nrun_as_admin=0`r`nindex_as_admin=0`r`nipc=1`r`n"
-Set-Content -LiteralPath (Join-Path $appData 'Everything-1.5a.ini') -Encoding ASCII -Value "[Everything]`r`nallow_tabs=1`r`nallow_multiple_windows=0`r`nallow_multiple_instances=0`r`nopen_searches_in_tabs=1`r`nopen_new_windows_in_tabs=0`r`nsession_store=1`r`nsession_store_save_delay=15000`r`ntabs_show=1`r`ntabs_always_show=1`r`n"
+Set-Content -LiteralPath (Join-Path $appData 'Everything-1.5a.ini') -Encoding ASCII -Value "[Everything]`r`nallow_tabs=1`r`nallow_multiple_windows=0`r`nallow_multiple_instances=0`r`nopen_searches_in_tabs=1`r`nopen_new_windows_in_tabs=0`r`nsession_store=1`r`nsession_store_save_delay=15000`r`ntabs_show=1`r`ntabs_always_show=1`r`ntabs_load_in_background=0`r`n"
 
 New-Item -ItemType Directory -Force -Path 'C:\evtest' | Out-Null
 foreach ($n in 'alpha','bravo','charlie','delta','echo') { 1..3 | ForEach-Object { Set-Content -LiteralPath "C:\evtest\evtab_${n}_$_.txt" -Value 'dummy' } }
@@ -77,13 +85,7 @@ function Get-EvWindows {
     foreach ($h in [N]::Tops('EVERYTHING_(')) {
         $tab = [N]::Child($h, 'SysTabControl32')
         $names = @()
-        if ($tab -ne [IntPtr]::Zero) {
-            try {
-                $cond = New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::TabItem)
-                $items = [System.Windows.Automation.AutomationElement]::FromHandle($tab).FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-                foreach ($i in $items) { $names += $i.Current.Name }
-            } catch {}
-        }
+        if ($tab -ne [IntPtr]::Zero) { $names = @([N]::TabNames($tab)) }
         $out += [PSCustomObject]@{ Hwnd = $h; Class = [N]::Cls($h); Tabs = $names }
     }
     return ,$out
@@ -183,8 +185,20 @@ foreach ($s in 'evtab_alpha','evtab_bravo','evtab_charlie') {
 $w = Get-EvWindows
 Add-Check 'seed tabs opened' (($w | ForEach-Object { $_.Tabs.Count } | Measure-Object -Sum).Sum -ge 3) (($w | ForEach-Object { $_.Tabs -join ' | ' }) -join ' || ')
 $before = if (Test-Path -LiteralPath $sessionFile) { (Get-Item -LiteralPath $sessionFile).LastWriteTimeUtc } else { [datetime]::MinValue }
-$fresh = Wait-Until { (Test-Path -LiteralPath $sessionFile) -and (Get-Item -LiteralPath $sessionFile).LastWriteTimeUtc -gt $before } 35
-Add-Check 'session file autosaves while running' $fresh "exists=$(Test-Path -LiteralPath $sessionFile)"
+$urlOnly = Wait-Until { (Test-Path -LiteralPath $sessionFile) -and (Get-Item -LiteralPath $sessionFile).LastWriteTimeUtc -gt $before } 24
+Add-Check 'INFO session saves after URL-opened tabs alone' $urlOnly 'FAIL here means the picker can be stale until the Everything window is used'
+function Invoke-SessionTrigger([string]$Text) {
+    $target = (Get-EvWindows)[0].Hwnd
+    [N]::SetForegroundWindow($target) | Out-Null
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait('^t')
+    Start-Sleep -Milliseconds 600
+    [System.Windows.Forms.SendKeys]::SendWait($Text)
+    Start-Sleep -Milliseconds 500
+}
+Invoke-SessionTrigger 'evtab_trigger'
+$fresh = Wait-Until { (Test-Path -LiteralPath $sessionFile) -and (Get-Item -LiteralPath $sessionFile).LastWriteTimeUtc -gt $before } 30
+Add-Check 'session file autosaves after using the window' $fresh "exists=$(Test-Path -LiteralPath $sessionFile)"
 Start-Sleep -Seconds 2
 $sessionHasSeeds = Wait-Until { (Get-Content -LiteralPath $sessionFile -Raw -ErrorAction SilentlyContinue) -match 'evtab_charlie' } 25
 Add-Check 'session contains seeded tabs' $sessionHasSeeds
@@ -349,6 +363,7 @@ foreach ($s in 'evtab_bookmark_one','evtab "quoted" two') {
     Invoke-Everything @('-url', ('es:' + [uri]::EscapeDataString($s) + '?newtab=1')) | Out-Null
     Start-Sleep -Milliseconds 700
 }
+Invoke-SessionTrigger 'evtab_bm_trigger'
 Wait-Until { (Get-Content -LiteralPath $sessionFile -Raw -ErrorAction SilentlyContinue) -match 'evtab_bookmark_one' } 30 | Out-Null
 Start-Sleep -Seconds 2
 $r = Invoke-Bookmarks
